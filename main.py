@@ -40,7 +40,12 @@ OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 LEVELS = [0.05, 0.25, 0.5, 0.75, 0.95]
 Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
 BASE_SIGMA = 0.15          # persistence baseline's per-root-hour spread
-SIGMA_SHRINK = 0.85        # shrink on the regression residual spread
+# Shrink on the regression residual spread.  The tuning grid (leave-one-out
+# over the kept comparables vs the four practice cases) is flat between 0.7
+# and 0.9 -- LOO 0.261 at 0.9, practice 0.175 at 0.7 -- so 0.80 is the
+# middle: it keeps most of the practice gain without over-tuning to four
+# launches, and keeps the 90% band honest on the small-launch case.
+SIGMA_SHRINK = 0.80        # shrink on the regression residual spread
 MIN_KEPT = 8               # need this many usable comparables, else relax
 MIN_DAY_HOURS = 20         # a usable comparable covers most of its launch day
 H1_PEAK_FLOOR = 0.03       # hour 1 below this share of the day peak = simul. unlock
@@ -187,10 +192,30 @@ def fit_curves(curves):
         sig[hour] = max(math.sqrt(var), SIGMA_FLOOR) * SIGMA_SHRINK
     if len(med) < 12:
         return None
+    med = smooth3(med)
+    slope = smooth3(slope)
+    sig = smooth3(sig)
+    # A launch-day curve is smooth, so an hour the fit missed (too few
+    # launches reported it) is interpolated from its fitted neighbours
+    # rather than dropped to the persistence baseline for that one hour.
+    for series in (med, slope, sig):
+        for hour in range(2, 25):
+            if hour in series:
+                continue
+            below = [h for h in range(2, hour) if h in series]
+            above = [h for h in range(hour + 1, 25) if h in series]
+            if below and above:
+                lo, hi = below[-1], above[0]
+                w = (hour - lo) / (hi - lo)
+                series[hour] = series[lo] * (1.0 - w) + series[hi] * w
+            elif below:
+                series[hour] = series[below[-1]]
+            elif above:
+                series[hour] = series[above[0]]
     return {
-        "med": smooth3(med),
-        "slope": smooth3(slope),
-        "sig": smooth3(sig),
+        "med": med,
+        "slope": slope,
+        "sig": sig,
         "xbar": xbar,
         "xmin": min(log_h1),
         "xmax": max(log_h1),
